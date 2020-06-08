@@ -1,0 +1,219 @@
+<html>
+
+<head>
+  <script src="js/three.js"></script>
+  <style>
+    /* We want our scene to span the entire window */
+    body {
+      margin: 0;
+    }
+  </style>
+</head>
+
+<body>
+  <script id="fragShader" type="shader-code">
+		uniform vec2 res;//The width and height of our screen
+    uniform sampler2D bufferTexture;//Our input texture
+    uniform sampler2D firstFrame;
+		uniform vec3 smokeSource;//The x,y are the posiiton. The z is the power/density
+    uniform float time;
+    uniform vec4 u_mouse;
+    uniform float dis;
+    uniform int counter;
+    #define RotNum 5
+
+    const float ang = 2.0*3.1415926535/float(RotNum);
+    mat2 m = mat2(cos(ang),sin(ang),-sin(ang),cos(ang));
+    mat2 mh = mat2(cos(ang*0.5),sin(ang*0.5),-sin(ang*0.5),cos(ang*0.5));
+    float hash(float seed) { return fract(sin(seed)*158.5453 ); }
+    vec4 getRand4(float seed) { return vec4(hash(seed),hash(seed+123.21),hash(seed+234.32),hash(seed+453.54)); }
+    vec4 randS(vec2 uv)
+    {
+    return getRand4(uv.y+uv.x*1234.567)-vec4(0.5);
+    }
+    float getRot(vec2 pos, vec2 b)
+    {
+    vec2 p = b;
+    float rot=0.0;
+    for(int i=0;i<RotNum;i++)
+    {
+        rot+=dot(texture2D(bufferTexture,fract((pos+p)/res.xy)).xy-vec2(0.5),p.yx*vec2(1,-1));
+        p = m*p;
+    }
+    return rot/float(RotNum)/dot(b,b);
+    }
+    vec2 normz(vec2 x) {
+	return x == vec2(0) ? vec2(0) : normalize(x);
+}
+
+		void main() {
+          vec2 pos=gl_FragCoord.xy;
+          vec2 uv = gl_FragCoord.xy/res.xy;
+          vec2 tx = vec2(1.0)/res.xy;
+          float rnd=randS(vec2(float(time)/res.x,0.5/res.y)).x;
+          vec2 b=vec2(cos(ang*rnd),sin(ang*rnd));
+          vec2 v=vec2(0.);
+          float bbMax=0.7*res.y;
+          bbMax*=bbMax;
+          for(int l=0;l<20;l++){
+            if(dot(b,b)>bbMax) break;
+            vec2 p=b;
+            for(int i=0;i<RotNum;i++){
+              v+=p.yx*getRot(pos+p,b);
+              p = m*p;
+            }
+            b*=2.0;
+          }
+          gl_FragColor=texture2D(bufferTexture,fract((pos+v*vec2(-1,1)*2.0)/res.xy));
+          vec2 scr=(gl_FragCoord.xy/res.xy)*2.0-vec2(1.0);
+          gl_FragColor.xy += (0.01*scr.xy / (dot(scr,scr)/0.1+0.3));
+          if (u_mouse.z > 0.0) {
+        vec4 mouseUV = u_mouse.xyzw/res.xyxy;
+        vec2 delta = normz(mouseUV.zw - mouseUV.xy);
+        vec2 md = (mouseUV.xy - uv) * vec2(1.0,tx.x/tx.y);
+        float amp = exp(max(-12.0,-dot(md,md)/dis));
+        gl_FragColor.xy += 8. * clamp(amp*delta ,-1.0,1.0);
+
+       
+    }
+     if(counter<10) gl_FragColor=texture2D(firstFrame,gl_FragCoord.xy/res.xy);
+		 }
+	</script>
+  <script>
+    //@author Omar Shehata. 2015.
+    //We are loading the Three.js library from the cdn here: http://cdnjs.com/libraries/three.js/
+    var scene;
+    var camera;
+    var renderer;
+
+    function scene_setup() {
+      //This is the basic scene setup
+      scene = new THREE.Scene();
+      var width = window.innerWidth;
+      var height = window.innerHeight;
+      //Note that we're using an orthographic camera here rather than a prespective
+      camera = new THREE.OrthographicCamera(width / - 2, width / 2, height / 2, height / - 2, 1, 1000);
+      camera.position.z = 100;
+
+      renderer = new THREE.WebGLRenderer();
+      renderer.setSize(window.innerWidth, window.innerHeight);
+      document.body.appendChild(renderer.domElement);
+    }
+
+    var bufferScene;
+    var renderTargetA;
+    var renderTargetB;
+    var bufferMaterial;
+    var plane;
+    var bufferObject;
+    var finalMaterial;
+    var quad;
+
+    function buffer_texture_setup() {
+      //Create buffer scene
+      bufferScene = new THREE.Scene();
+      //Create 2 buffer textures
+      renderTargetA = new THREE.WebGLRenderTarget(window.innerWidth, window.innerHeight, { minFilter: THREE.LinearFilter, magFilter: THREE.NearestFilter });
+      renderTargetB = new THREE.WebGLRenderTarget(window.innerWidth, window.innerHeight, { minFilter: THREE.LinearFilter, magFilter: THREE.NearestFilter });
+      //Pass textureA to shader
+      bufferMaterial = new THREE.ShaderMaterial({
+        uniforms: {
+          bufferTexture: { type: "t", value: renderTargetA.texture },
+          firstFrame: { type: "t", value: THREE.ImageUtils.loadTexture("texture1.jpg") },
+          counter: { type: 'i', value: 0 },
+          res: { type: 'v2', value: new THREE.Vector2(window.innerWidth, window.innerHeight) },//Keeps the resolution
+          u_mouse: { type: "v4", value: new THREE.Vector4(0, 0, 0,0) },
+          time: { type: "f", value: Math.random() * Math.PI * 2 + Math.PI },
+          dis:{type:'f',value:0.1}
+        },
+        fragmentShader: document.getElementById('fragShader').innerHTML
+      });
+      plane = new THREE.PlaneBufferGeometry(window.innerWidth, window.innerHeight);
+      bufferObject = new THREE.Mesh(plane, bufferMaterial);
+      bufferScene.add(bufferObject);
+
+      //Draw textureB to screen 
+      finalMaterial = new THREE.MeshBasicMaterial({ map: renderTargetB.texture });
+      quad = new THREE.Mesh(plane, finalMaterial);
+      scene.add(quad);
+    }
+
+    //Initialize the Threejs scene
+    scene_setup();
+
+    //Setup the frame buffer/texture we're going to be rendering to instead of the screen
+    buffer_texture_setup();
+
+  const scale = (num, in_min, in_max, out_min, out_max) => {
+    return (num - in_min) * (out_max - out_min) / (in_max - in_min) + out_min;
+  }
+        let px = 0;
+        let py = 0;
+    //Send position of smoke source with value
+    var mouseDown = false;
+    function UpdateMousePosition(X, Y) {
+      var mouseX = X;
+      var mouseY = window.innerHeight - Y;
+      dis= Math.sqrt((mouseX-px) * (mouseX - px) + (mouseY - py) * (mouseY - py));
+      //console.log('before',dis)
+      dis=scale(dis,0,50,0.00003,0.0003);
+      //console.log('before', dis)
+      bufferMaterial.uniforms.dis.value = dis;
+      bufferMaterial.uniforms.u_mouse.value.x = mouseX;
+      bufferMaterial.uniforms.u_mouse.value.y = mouseY;
+      px=mouseX;
+      py=mouseY;
+
+    }
+    document.onmousemove = function (event) {
+      UpdateMousePosition(event.clientX, event.clientY)
+    }
+
+    document.onmousedown = function (event) {
+      mouseDown = true;
+
+      bufferMaterial.uniforms.u_mouse.value.z = 0.1;
+      console.log('dis',dis)
+      
+      //console.log('mousedown')
+    }
+    document.onmouseup = function (event) {
+      mouseDown = false;
+      bufferMaterial.uniforms.u_mouse.value.z = 0.0;
+    }
+
+    //Render everything!
+    function render() {
+
+      requestAnimationFrame(render);
+
+      //Draw to textureB
+      
+      renderer.setRenderTarget(renderTargetB);
+       renderer.clear();
+      renderer.render(bufferScene, camera);
+      renderer.setRenderTarget(null);
+      
+     // renderer.render(bufferScene, camera, textureB, true);
+
+      //Swap textureA and B
+      var t = renderTargetA;
+      renderTargetA = renderTargetB;
+      renderTargetB = t;
+      quad.material.map = renderTargetB.texture;
+      bufferMaterial.uniforms.bufferTexture.value = renderTargetA.texture;
+
+      //Update time
+      bufferMaterial.uniforms.time.value += 0.01;
+      bufferMaterial.uniforms.counter.value+=1;
+
+      //Finally, draw to the screen
+      renderer.render(scene, camera);
+    }
+    render();
+
+
+  </script>
+</body>
+
+</html>
